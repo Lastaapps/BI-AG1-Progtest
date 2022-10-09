@@ -96,11 +96,14 @@ ostream& operator <<(ostream &os, const unordered_map<K, V>& data) {
 }
 
 list<Point> find_path(const Map &map) {
+  cout << "Started" << endl;
+  cout << "Constructing graph" << endl;
   const unordered_set<Point> valueable = valuableRooms(map);
   const Graph graph = constructGraph(map);
 
   //for (const auto& edge : graph.edges) cout << edge.first << " -> " << edge.second << endl;
 
+  cout << "Finding distances" << endl;
   BackMap distances;
   for (const auto p : valueable) {
     const auto res = bfsDistance(graph, p, valueable);
@@ -110,7 +113,9 @@ list<Point> find_path(const Map &map) {
 
   //for (const auto& i0 : distances) cout << i0.first << " -> " << i0.second << endl;
   
+  cout << "Finding the shortest path" << endl;
   const vector<Point> shortestPaht = findShortest(distances, map.items, map.start, map.end);
+  cout << "Resolving result" << endl;
   return resolveBacktracking(graph, shortestPaht);
 }
 
@@ -456,8 +461,9 @@ const vector<TestCase> examples = {
 };
 
 void memoryTest() {
-  size_t max = 1000;
-  size_t itemsMax = 4;
+  size_t max = 10000;
+  size_t itemsMax = 8;
+  size_t maxInRoom = 5;
   vector<pair<Point, Point>> edges;
   vector<vector<Point>> items;
 
@@ -465,7 +471,7 @@ void memoryTest() {
     edges.emplace_back(make_pair(rand() % 1000, rand() % 1000));
   for (size_t i = 0; i < itemsMax; ++i) {
     items.emplace_back(vector<Point>());
-    for (size_t j = 0; j < max / 10; ++j)
+    for (size_t j = 0; j < maxInRoom; ++j)
       items[i].emplace_back(rand() % 1000);
   }
   const auto map = Map{max, 0, 1, edges, items};
