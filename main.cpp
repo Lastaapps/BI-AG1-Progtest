@@ -85,8 +85,10 @@ struct Graph {
 
 
 
-LookupMap buildItemsLookup(const vector<vector<Point>>& src) {
+inline LookupMap buildItemsLookup(const Map& params) {
+  const vector<vector<Point>>& src = params.items;
   unordered_map<Point, vector<Point>> map; 
+
   for (uint8_t i = 0; i < src.size(); ++i)
     for (const auto point : src[i]) {
       const auto found = map.find(point);
@@ -102,6 +104,10 @@ LookupMap buildItemsLookup(const vector<vector<Point>>& src) {
       m |= 1 << item;
     lookup.emplace(entry.first, m);
   }
+  if (lookup.count(params.start) == 0)
+    lookup.emplace(params.start, 0);
+  if (lookup.count(params.end) == 0)
+    lookup.emplace(params.end, 0);
   return lookup;
 }
 
@@ -114,7 +120,7 @@ inline Mask createEndMask(const uint8_t items) {
   return m;
 }
 
-vector<Point> backtrack(const ParentsMap& parents, const StatePoint end) {
+inline vector<Point> backtrack(const ParentsMap& parents, const StatePoint end) {
   StatePoint latest = make_pair(-1, 0);
   StatePoint from = end;
   vector<Point> out;
@@ -129,7 +135,7 @@ vector<Point> backtrack(const ParentsMap& parents, const StatePoint end) {
   return out;
 }
 
-vector<Point> smartBfs(const Graph& graph, const LookupMap& lookup, const Map& params) {
+inline vector<Point> smartBfs(const Graph& graph, const LookupMap& lookup, const Map& params) {
   queue<StatePoint> q;
   ParentsMap parents;
 
@@ -176,9 +182,9 @@ inline Graph buildGraph(const Map& map) {
   return graph;
 }
 
-std::list<Place> find_path(const Map &map) {
+inline std::list<Place> find_short_path(const Map &map) {
   const Graph graph = buildGraph(map);
-  const LookupMap lookup = buildItemsLookup(map.items);
+  const LookupMap lookup = buildItemsLookup(map);
   //for (const auto& edge : graph.edges) cout << edge.first << " -> " << edge.second << endl;
   
   const vector<Point> points = smartBfs(graph, lookup, map);
@@ -186,6 +192,233 @@ std::list<Place> find_path(const Map &map) {
   for (auto itr = points.rbegin(); itr != points.rend(); ++itr)
     result.emplace_back(*itr);
   return result;
+}
+
+
+
+// --- LONG PATH --------------------------------------------------------------
+
+using ValuedGraph = unordered_multimap<Point, pair<Point, size_t>>;
+
+inline unordered_map<Point, size_t> bfsDistance(const Graph& graph, const Place start, const unordered_set<Place>& targets) {
+  unordered_set<Point> visited;
+  unordered_map<Point, size_t> result;
+  size_t targesFound = 0;
+
+  queue<pair<Point, size_t>> q;
+  q.emplace(make_pair(start, 0));
+
+  while (!q.empty()) {
+    const auto p = q.front();
+    q.pop();
+
+    if (targets.find(p.first) != targets.end()) {
+      result.emplace(p);
+      ++targesFound;
+    }
+
+    if (targesFound >= targets.size())
+      break;
+
+    const auto range = graph.edges.equal_range(p.first);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+      const Point to = itr -> second;
+      if (visited.find(to) != visited.end())
+        continue;
+
+      visited.emplace(to);
+      q.emplace(make_pair(to, p.second + 1));
+    }
+  }
+  return result;
+}
+
+inline unordered_set<Point> valuableRooms(const Map& map) {
+  unordered_set<Point> result;
+  result.emplace(map.start);
+  result.emplace(map.end);
+  for (const auto& data : map.items)
+    for (const auto item : data)
+      result.emplace(item);
+  return result;
+}
+
+ValuedGraph buildValuedGraph(const Graph& graph, const LookupMap& lookup, const Map& params) {
+  auto valueable = valuableRooms(params);
+  ValuedGraph distances;
+
+  auto itr = valueable.begin();
+  while (itr != valueable.end()) {
+    const auto p = *itr;
+    auto tmpItr = itr++;
+    valueable.erase(tmpItr);
+
+    auto current = valueable;
+
+    const Mask groups = lookup.find(p)->second;
+
+    for (uint8_t i = 0; i < params.items.size(); ++i) {
+      if ((groups & Mask(1 << i)) == 0) continue; 
+      for (const auto neighbor : params.items[i])
+        current.erase(neighbor);
+    }
+
+    const auto res = bfsDistance(graph, p, current);
+    for (auto const& entry : res) {
+      distances.emplace(p, entry);
+      distances.emplace(entry.first, make_pair(p, entry.second));
+    }
+  }
+  return distances;
+}
+
+ValuedGraph buildValuedGraphOld(const Graph& graph, const LookupMap& lookup, const Map& params) {
+  const auto valueable = valuableRooms(params);
+  ValuedGraph distances;
+  for (const auto p : valueable) {
+    const auto res = bfsDistance(graph, p, valueable);
+    for (auto const& entry : res)
+      distances.emplace(p, entry);
+  }
+  return distances;
+}
+
+vector<Point> smartDijikstra(const ValuedGraph& graph, const LookupMap& lookup, const Map& params) {
+  unordered_map<StatePoint, size_t> evaluation;
+  unordered_map<StatePoint, StatePoint> parents;
+  queue<StatePoint> q;
+  bool endReached = false;
+
+  const auto startMaskSearch = lookup.find(params.start);
+  const Mask startMask = startMaskSearch == lookup.end() ? 0 : startMaskSearch->second;
+  const Mask endMask = createEndMask(params.items.size());
+
+  const StatePoint start = make_pair(params.start, startMask);
+  const StatePoint end = make_pair(params.end, endMask);
+
+  q.emplace(start);
+  evaluation.emplace(start, 0);
+  parents.emplace(start, start);
+
+  while (!q.empty()) {
+    const auto p = q.front();
+    q.pop();
+    if (p == end) endReached = true;
+    const size_t base = evaluation.find(p) -> second;
+
+    const auto range = graph.equal_range(p.first);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+      const Point targetPoint = itr->second.first;
+      const size_t edgeLength = itr->second.second;
+
+      const auto items = lookup.find(targetPoint);
+      const Mask nextMask = p.second | items->second;
+
+      const StatePoint target = make_pair(targetPoint, nextMask);
+      const auto currItr = evaluation.find(target);
+      const size_t sum = base + edgeLength;
+
+      if (currItr == evaluation.end()) {
+        q.emplace(target);
+        evaluation.emplace(target, sum);
+        parents.emplace(target, p);
+      } else {
+        const size_t pathLength = currItr->second;
+        if (base + edgeLength < pathLength)  {
+          evaluation.find(target) -> second = sum;
+          parents.find(target) -> second = p;
+        }
+      }
+    }
+  }
+  //cout << "Evalul:  " << evaluation << endl;
+  //cout << "Parents: " << parents << endl;
+  //cout << "End:     " << end <<  ", reached: " << endReached << endl;
+
+  return endReached ? backtrack(parents, end) : vector<Point>{};
+}
+
+inline vector<Point> reconstructPath(const unordered_map<Point, Point> parents, Point end) {
+  vector<Point> out;
+  Point prev = -1;
+  //cout << "Parents: " << parents << endl;
+  //cout << "End:     " << end << endl;
+  while(true) {
+    if (end == prev) break;
+
+    out.emplace_back(end);
+
+    auto next = parents.find(end);
+    if (next == parents.end())
+      break;
+
+    prev = end;
+    end = next -> second;
+  }
+  return out;
+}
+
+inline vector<Point> bfsPredecesors(const Graph& graph, const Place start, const Place end) {
+  unordered_map<Point, Point> parents;
+
+  queue<Point> q;
+  q.emplace(start);
+  parents.emplace(start, start);
+
+  while (!q.empty()) {
+    const Point p = q.front();
+    q.pop();
+
+    if (p == end)
+      return reconstructPath(parents, p);
+
+    const auto range = graph.edges.equal_range(p);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+      const Point to = itr -> second;
+      if (parents.find(to) != parents.end())
+        continue;
+
+      q.emplace(to);
+      parents.emplace(to, p);
+    }
+  }
+  return vector<Point>();
+}
+
+inline list<Point> resolveBacktracking(const Graph& graph, const vector<Point>& path) {
+  list<Point> result;
+  if (path.empty()) return result;
+  result.emplace_back(path[path.size() - 1]);
+
+  for (auto pathItr = ++path.rbegin(); pathItr != path.rend(); ++ pathItr) {
+    Point from = *(pathItr - 1);
+    Point to = *pathItr;
+    const auto rooms = bfsPredecesors(graph, from, to);
+    //cout << "Rooms: " << rooms << endl;
+
+    for (auto roomItr = ++rooms.rbegin(); roomItr != rooms.rend(); ++roomItr)
+      result.emplace_back(*roomItr);
+  }
+  return result;
+}
+
+inline std::list<Place> find_long_path(const Map &map) {
+  //cout << "Dij: Init" << endl;
+  const Graph graph = buildGraph(map);
+  const LookupMap lookup = buildItemsLookup(map);
+  //cout << "Dij: Evaulation" << endl;
+  const ValuedGraph valued = buildValuedGraph(graph, lookup, map);
+  //const ValuedGraph valued = buildValuedGraphOld(graph, lookup, map);
+  //for (const auto& i0 : valued) cout << i0.first << " -> (" << i0.second.first << ", " << i0.second.second << ")" << endl;
+
+  //cout << "Dij: Dijkstra" << endl;
+  const vector<Point> points = smartDijikstra(valued, lookup, map);
+  //cout << "Dij: Resolving" << endl;
+  return resolveBacktracking(graph, points);
+}
+
+std::list<Place> find_path(const Map &map) {
+  return (map.places < 4098 && map.items.size() <= 6) ? find_short_path(map) : find_long_path(map);
 }
 
 #ifndef __PROGTEST__
@@ -276,33 +509,50 @@ const vector<TestCase> examples = {
 };
 
 void memoryTest() {
-  size_t max = 10000;
-  size_t itemsMax = 8;
+  cout << "Mem: Init" << endl;
+  size_t rooms = 10000;
+  size_t itemsMax = 12;
   size_t maxInRoom = 5;
   vector<pair<Point, Point>> edges;
   vector<vector<Point>> items;
 
-  for (size_t i = 0; i < 10 * max; ++i)
-    edges.emplace_back(make_pair(rand() % 1000, rand() % 1000));
+  for (size_t i = 0; i < 10 * rooms; ++i)
+    edges.emplace_back(make_pair(rand() % rooms, rand() % rooms));
   for (size_t i = 0; i < itemsMax; ++i) {
     items.emplace_back(vector<Point>());
     for (size_t j = 0; j < maxInRoom; ++j)
-      items[i].emplace_back(rand() % 1000);
+      items[i].emplace_back(rand() % rooms);
   }
-  const auto map = Map{max, 0, 1, edges, items};
+  const auto map = Map{rooms, rand() % rooms, rand() % rooms, edges, items};
+  cout << "Mem: Run" << endl;
   find_path(map);
+  cout << "Mem: Done" << endl;
 }
 
 int main() {
   int fail = 0;
   for (size_t i = 0; i < examples.size(); i++) {
-    std::cout << "Running test for map " << i << std::endl;
+    std::cout << "OLD: Running test for map " << i << std::endl;
+    auto solOld = find_short_path(examples[i].second);
+    cout << "OLD: Solution: " << solOld << endl;
+    if (solOld.size() != examples[i].first) {
+      std::cout << "OLD: Wrong answer for map " << i << std::endl;
+      fail++;
+      cout << endl;
+      continue;
+    }
+    
+    std::cout << "NEW: Running test for map " << i << std::endl;
+    auto solNew = find_long_path(examples[i].second);
+    cout << "NEW: Solution: " << solNew << endl;
+    if (solNew.size() != examples[i].first) {
+      std::cout << "NEW: Wrong answer for map " << i << std::endl;
+      fail++;
+      cout << endl;
+      continue;
+    }
 
-    auto sol = find_path(examples[i].second);
-
-    cout << "Solution: " << sol << endl;
-
-    if (sol.size() != examples[i].first) {
+    if (solOld != solNew) {
       std::cout << "Wrong answer for map " << i << std::endl;
       fail++;
     }
