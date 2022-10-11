@@ -88,6 +88,14 @@ ostream& operator <<(ostream &os, const unordered_set<T>& data) {
   os << "/";
   return os;
 }
+template<typename K, typename V>
+ostream& operator <<(ostream &os, const unordered_map<K, V>& data) {
+  os << "{";
+  for (const auto& i0 : data)
+    os << i0 << ", ";
+  os << "}";
+  return os;
+}
 
 struct Graph {
   unordered_multimap<Point, Point> edges;
@@ -337,6 +345,9 @@ vector<Point> superSmartDijikstra(const ValuedGraph& graph, const LookupMap& loo
       const auto items = lookup.find(targetPoint);
       const Mask nextMask = p.second | items->second;
 
+      if ((nextMask ^ p.second) == 0 && p.second != endMask)
+        continue;
+
       const StatePoint target = make_pair(targetPoint, nextMask);
       const auto currItr = evaluation.find(target);
       const size_t sum = base + edgeLength;
@@ -405,6 +416,7 @@ vector<Point> smartDijikstra(const ValuedGraph& graph, const LookupMap& lookup, 
       } else {
         const size_t pathLength = currItr->second;
         if (base + edgeLength < pathLength)  {
+          q.emplace(target);
           evaluation.find(target) -> second = sum;
           parents.find(target) -> second = p;
         }
@@ -614,6 +626,11 @@ const vector<TestCase> examples = {
     {{0, 1}, {1, 2}},
     {{0, 1, 2}, {0, 1, 2}, {1, 2}}
   }},
+  // 18
+  TestCase{ 7, Map{ 7, 3, 3,
+    {{0, 1}, {0, 6}, {2, 6}, {3, 4}, {4, 6}},
+    {{1, 2}, {0, 1, 3}, {0, 1, 6}, {0, 1, 4}}
+  }},
   //// 0
   //TestCase{ 0, Map{ 2, 0, 1,
   //  {},
@@ -711,9 +728,12 @@ int main() {
 
   cout << "Starting correctness test" << endl;
   size_t correctnessProblems = 0;
-  for (size_t i = 0; i < 4096; i++) if(!correctnessTest(4, 4, 5)) ++correctnessProblems;
-  cout << "Using larger tests" << endl;
-  for (size_t i = 0; i < 1024; i++) if(!correctnessTest(13, 5, 6)) ++correctnessProblems;
+  cout << "Running small tests" << endl;
+  for (size_t i = 0; i < 65536; i++) if(!correctnessTest(4, 4, 5)) ++correctnessProblems;
+  cout << "Running larger tests" << endl;
+  for (size_t i = 0; i < 65536; i++) if(!correctnessTest(13, 5, 6)) ++correctnessProblems;
+  cout << "Running really large tests" << endl;
+  for (size_t i = 0; i < 65536; i++) if(!correctnessTest(20, 6, 7)) ++correctnessProblems;
   if (correctnessProblems == 0) cout << "All tests passed" << endl;
   else cout << "Errors found: " << correctnessProblems << endl;
   
