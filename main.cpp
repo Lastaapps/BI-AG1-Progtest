@@ -1,4 +1,4 @@
-#pragma GCC optimize("Ofast")
+//#pragma GCC optimize("Ofast")
 
 #ifndef __PROGTEST__
 #include <cassert>
@@ -39,7 +39,7 @@ struct std::hash<std::pair<F, S>> {
 #endif
 using namespace std;
 using Point = Place;
-using Mask = bitset<12>;
+using Mask = bitset<16>;
 using LookupMap = unordered_map<Point, Mask>;
 using StatePoint = pair<Point, Mask>;
 using ParentsMap = unordered_map<StatePoint, StatePoint>;
@@ -78,6 +78,14 @@ ostream& operator <<(ostream &os, const queue<T>& data) {
   for (const auto& i0 : data)
     os << i0 << ", ";
   os << "]";
+  return os;
+}
+template<typename T>
+ostream& operator <<(ostream &os, const unordered_set<T>& data) {
+  os << "/";
+  for (const auto& i0 : data)
+    os << i0 << ", ";
+  os << "/";
   return os;
 }
 
@@ -255,15 +263,14 @@ ValuedGraph buildValuedGraph(const Graph& graph, const LookupMap& lookup, const 
     auto tmpItr = itr++;
     valueable.erase(tmpItr);
 
-    auto current = valueable;
-
-    const Mask groups = lookup.find(p)->second;
-
-    for (uint8_t i = 0; i < params.items.size(); ++i) {
-      if ((groups & Mask(1 << i)) == 0) continue; 
-      for (const auto neighbor : params.items[i])
-        current.erase(neighbor);
+    const Mask myMask = lookup.find(p)->second;
+    unordered_set<Point> current;
+    for (const auto other : valueable) {
+      const Mask otherMask = lookup.find(other)->second;
+      if (myMask != otherMask)
+        current.emplace(other);
     }
+    
 
     const auto res = bfsDistance(graph, p, current);
     for (auto const& entry : res) {
@@ -271,6 +278,14 @@ ValuedGraph buildValuedGraph(const Graph& graph, const LookupMap& lookup, const 
       distances.emplace(entry.first, make_pair(p, entry.second));
     }
   }
+ 
+  // handle situation, where start and end are neighbors
+  const auto res = bfsDistance(graph, params.start, {params.end});
+  for (auto const& entry : res) {
+    distances.emplace(params.start, entry);
+    distances.emplace(entry.first, make_pair(params.start, entry.second));
+  }
+
   return distances;
 }
 
@@ -376,6 +391,9 @@ vector<Point> smartDijikstra(const ValuedGraph& graph, const LookupMap& lookup, 
       const auto items = lookup.find(targetPoint);
       const Mask nextMask = p.second | items->second;
 
+      if ((nextMask ^ p.second) == 0 && p.second != endMask)
+        continue;
+
       const StatePoint target = make_pair(targetPoint, nextMask);
       const auto currItr = evaluation.find(target);
       const size_t sum = base + edgeLength;
@@ -465,18 +483,16 @@ inline list<Point> resolveBacktracking(const Graph& graph, const vector<Point>& 
 }
 
 inline std::list<Place> find_long_path(const Map &map) noexcept {
-  //cout << "Dij: Init" << endl;
   const Graph graph = buildGraph(map);
   const LookupMap lookup = buildItemsLookup(map);
-  //cout << "Dij: Evaulation" << endl;
-  const ValuedGraph valued = buildValuedGraph(graph, lookup, map);
+
   //const ValuedGraph valued = buildValuedGraphOld(graph, lookup, map);
+  const ValuedGraph valued = buildValuedGraph(graph, lookup, map);
   //for (const auto& i0 : valued) cout << i0.first << " -> (" << i0.second.first << ", " << i0.second.second << ")" << endl;
 
-  //cout << "Dij: Dijkstra" << endl;
   const vector<Point> points = smartDijikstra(valued, lookup, map);
   //const vector<Point> points = superSmartDijikstra(valued, lookup, map);
-  //cout << "Dij: Resolving" << endl;
+
   return resolveBacktracking(graph, points);
 }
 
@@ -487,6 +503,25 @@ std::list<Place> find_path(const Map &map) {
 #ifndef __PROGTEST__
 
 using TestCase = std::pair<size_t, Map>;
+
+bool samePaths(const Map& params, const list<Point>& ref, const list<Point>& sol) {
+  if (ref.size() != sol.size()) return false;
+
+  if (sol.size() <= 1) return ref == sol;
+
+  const Graph graph = buildGraph(params);
+  for(auto itr = sol.begin(); itr != --sol.end();) {
+    const Point curr = *itr;
+    const Point next = *++itr;
+    const auto range = graph.edges.equal_range(curr);
+    bool anyFound = false;
+    for (auto i = range.first; i != range.second; ++i)
+      if (i->second == next){ anyFound = true; break; }
+    if (!anyFound)
+      return false;
+  }
+  return true;
+}
 
 const vector<TestCase> examples = {
   // 0
@@ -564,18 +599,65 @@ const vector<TestCase> examples = {
     {{0, 1}, {0, 3}, {0, 3}, {1, 2}, {1, 6}, {2, 3}, {4, 5}, {5, 6}},
     {{0, 1}, {3, 5}, {2, 4}}
   }},
-  // 0
+  // 15
+  TestCase{ 2, Map{ 3, 1, 2,
+    {{0, 1}, {1, 2}, {2, 0}},
+    {{2, 0, 1}}
+  }},
+  // 16
+  TestCase{ 3, Map{ 5, 1, 3,
+    {{0, 4}, {1, 2}, {1, 3}, {1, 4}, {3, 4}},
+    {{0, 1, 4}, {2, 4}, {1, 4}}
+  }},
+  // 17
+  TestCase{ 2, Map{ 3, 2, 1,
+    {{0, 1}, {1, 2}},
+    {{0, 1, 2}, {0, 1, 2}, {1, 2}}
+  }},
+  //// 0
   //TestCase{ 0, Map{ 2, 0, 1,
   //  {},
   //  {}
   //}},
 };
 
-void memoryTest() {
-  cout << "Mem: Init" << endl;
-  size_t rooms = 10000;
-  size_t itemsMax = 12;
-  size_t maxInRoom = 5;
+bool correctnessTest(const size_t _rooms, const size_t _items, const size_t _inRoom) noexcept {
+  const size_t rooms = 1 + rand() % (_rooms - 1);
+  const size_t itemsMax = rand() % _items;
+  const size_t maxInRoom = rand() % _inRoom;
+  vector<pair<Point, Point>> edges;
+  vector<vector<Point>> items;
+
+  for (size_t i = 0; i < 3 * rooms / 2; ++i)
+    edges.emplace_back(make_pair(rand() % rooms, rand() % rooms));
+  for (size_t i = 0; i < itemsMax; ++i) {
+    items.emplace_back(vector<Point>());
+    for (size_t j = 0; j < maxInRoom; ++j)
+      items[i].emplace_back(rand() % rooms);
+  }
+
+  const auto map = Map{rooms, rand() % rooms, rand() % rooms, edges, items};
+  const auto ref = find_short_path(map);
+  const auto sol = find_long_path(map);
+
+  if (!samePaths(map, ref, sol)) {
+    cout << "Error found" << endl;
+    cout << "Graph: (" << map.start << ", " << map.end << ") " << map.connections << endl;
+    cout << "Items: " << map.items << endl;
+    cout << "Ref:   " << ref << endl;
+    cout << "Sol:   " << sol << endl;
+    return false;
+  } else {
+    // cout << "No problemo" << endl;
+    return true;
+  }
+}
+
+void bonusTest() noexcept {
+  cout << "Bonus: Init" << endl;
+  const size_t rooms = 10000;
+  const size_t itemsMax = 12;
+  const size_t maxInRoom = 5;
   vector<pair<Point, Point>> edges;
   vector<vector<Point>> items;
 
@@ -587,10 +669,9 @@ void memoryTest() {
       items[i].emplace_back(rand() % rooms);
   }
   const auto map = Map{rooms, rand() % rooms, rand() % rooms, edges, items};
-  cout << "Mem: Run" << endl;
-  //find_path(map);
+  cout << "Bonus: Run" << endl;
   find_long_path(map);
-  cout << "Mem: Done" << endl;
+  cout << "Bonus: Done" << endl;
 }
 
 int main() {
@@ -616,7 +697,7 @@ int main() {
       continue;
     }
 
-    if (solOld != solNew) {
+    if (!samePaths(examples[i].second, solOld, solNew)) {
       std::cout << "Wrong answer for map " << i << std::endl;
       fail++;
     }
@@ -624,10 +705,20 @@ int main() {
   }
 
   if (fail) std::cout << "Failed " << fail << " tests" << std::endl;
-  else std::cout << "All tests completed" << std::endl;
+  else std::cout << "All tests completed\n" << std::endl;
 
-  cout << "Starting memory test" << endl;
-  for (size_t i = 0; i < 10; i++) memoryTest();
+  //return 0;
+
+  cout << "Starting correctness test" << endl;
+  size_t correctnessProblems = 0;
+  for (size_t i = 0; i < 4096; i++) if(!correctnessTest(4, 4, 5)) ++correctnessProblems;
+  cout << "Using larger tests" << endl;
+  for (size_t i = 0; i < 1024; i++) if(!correctnessTest(13, 5, 6)) ++correctnessProblems;
+  if (correctnessProblems == 0) cout << "All tests passed" << endl;
+  else cout << "Errors found: " << correctnessProblems << endl;
+  
+  //cout << "Starting memory test" << endl;
+  //for (size_t i = 0; i < 10; i++) bonusTest();
 
   return 0;
 }
