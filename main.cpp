@@ -1,4 +1,4 @@
-//#pragma GCC optimize("Ofast")
+#pragma GCC optimize("Ofast")
 
 #ifndef __PROGTEST__
 #include <cassert>
@@ -308,8 +308,9 @@ ValuedGraph buildValuedGraphOld(const Graph& graph, const LookupMap& lookup, con
   return distances;
 }
 
+using StateLevel = pair<StatePoint, size_t>;
 struct Cmp {
-  int operator ()(const pair<StatePoint, size_t>& p0, const pair<StatePoint, size_t>& p1) const noexcept {
+  int operator ()(const StateLevel& p0, const StateLevel& p1) const noexcept {
     return p0.second > p1.second;
   }
 };
@@ -317,8 +318,7 @@ struct Cmp {
 vector<Point> superSmartDijikstra(const ValuedGraph& graph, const LookupMap& lookup, const Map& params) noexcept {
   unordered_map<StatePoint, size_t> evaluation;
   unordered_map<StatePoint, StatePoint> parents;
-  priority_queue<pair<StatePoint, size_t>, std::vector<pair<StatePoint, size_t>>, Cmp> q;
-  bool endReached = false;
+  priority_queue<StateLevel, vector<StateLevel>, Cmp> q;
 
   const auto startMaskSearch = lookup.find(params.start);
   const Mask startMask = startMaskSearch == lookup.end() ? 0 : startMaskSearch->second;
@@ -327,15 +327,19 @@ vector<Point> superSmartDijikstra(const ValuedGraph& graph, const LookupMap& loo
   const StatePoint start = make_pair(params.start, startMask);
   const StatePoint end = make_pair(params.end, endMask);
 
-  q.emplace(make_pair(start, 0));
+  q.emplace(start, 0);
+  evaluation.emplace(start, 0);
   parents.emplace(start, start);
 
   while (!q.empty()) {
-    const auto info = q.top();
-    const auto p = info.first;
+    const auto item = q.top();
+    const StatePoint p = item.first;
     q.pop();
-    if (p == end) endReached = true;
-    const size_t base = info.second;
+
+    if (p == end)
+      return backtrack(parents, end);
+
+    const size_t base = item.second;
 
     const auto range = graph.equal_range(p.first);
     for (auto itr = range.first; itr != range.second; ++itr) {
@@ -359,18 +363,16 @@ vector<Point> superSmartDijikstra(const ValuedGraph& graph, const LookupMap& loo
       } else {
         const size_t pathLength = currItr->second;
         if (base + edgeLength < pathLength)  {
+          q.emplace(target, sum);
           evaluation.find(target) -> second = sum;
           parents.find(target) -> second = p;
         }
       }
     }
   }
-  //cout << "Evalul:  " << evaluation << endl;
-  //cout << "Parents: " << parents << endl;
-  //cout << "End:     " << end <<  ", reached: " << endReached << endl;
-
-  return endReached ? backtrack(parents, end) : vector<Point>{};
+  return vector<Point>{};
 }
+
 vector<Point> smartDijikstra(const ValuedGraph& graph, const LookupMap& lookup, const Map& params) noexcept {
   unordered_map<StatePoint, size_t> evaluation;
   unordered_map<StatePoint, StatePoint> parents;
@@ -502,8 +504,8 @@ inline std::list<Place> find_long_path(const Map &map) noexcept {
   const ValuedGraph valued = buildValuedGraph(graph, lookup, map);
   //for (const auto& i0 : valued) cout << i0.first << " -> (" << i0.second.first << ", " << i0.second.second << ")" << endl;
 
-  const vector<Point> points = smartDijikstra(valued, lookup, map);
-  //const vector<Point> points = superSmartDijikstra(valued, lookup, map);
+  //const vector<Point> points = smartDijikstra(valued, lookup, map);
+  const vector<Point> points = superSmartDijikstra(valued, lookup, map);
 
   return resolveBacktracking(graph, points);
 }
