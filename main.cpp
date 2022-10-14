@@ -657,19 +657,26 @@ bool correctnessTest(const size_t _rooms, const size_t _items, const size_t _inR
 
   const auto map = Map{rooms, rand() % rooms, rand() % rooms, edges, items};
   const auto ref = find_short_path(map);
-  const auto sol = find_long_path(map);
+  try {
+    const auto sol = find_long_path(map);
 
-  if (!samePaths(map, ref, sol)) {
+    if (!samePaths(map, ref, sol)) {
+      cout << "Error found" << endl;
+      cout << "Graph: (" << map.start << ", " << map.end << ") " << map.connections << endl;
+      cout << "Items: " << map.items << endl;
+      cout << "Ref:   " << ref << endl;
+      cout << "Sol:   " << sol << endl;
+      return false;
+    }
+  } catch(exception& e) {
     cout << "Error found" << endl;
+    cout << "Execution failed: " << e.what() << endl;
     cout << "Graph: (" << map.start << ", " << map.end << ") " << map.connections << endl;
     cout << "Items: " << map.items << endl;
     cout << "Ref:   " << ref << endl;
-    cout << "Sol:   " << sol << endl;
     return false;
-  } else {
-    // cout << "No problemo" << endl;
-    return true;
   }
+  return true;
 }
 
 void bonusTest() noexcept {
