@@ -20,11 +20,11 @@
 
 using namespace std;
 
-template < typename Key>
+template <typename Key, typename Cmp = less<Key>>
 class AVLTree {
   struct Node {
     using SharedNode = shared_ptr<Node>;
-    const Key key;
+    Key key;
     size_t sum = 0;
     SharedNode left = nullptr, right = nullptr;
     weak_ptr<Node> parent;
@@ -34,8 +34,15 @@ class AVLTree {
 
     bool isLeftChild() const {
       const SharedNode lock = parent.lock();
-      // return lock == nullptr || lock.get() == this;
       return lock == nullptr || lock -> left.get() == this;
+    }
+
+    bool isList() const {
+      return left == nullptr && right == nullptr;
+    }
+
+    bool isFull() const {
+      return left != nullptr && right != nullptr;
     }
 
     friend ostream& operator<<(ostream& out, const Node& node) {
@@ -50,6 +57,8 @@ class AVLTree {
         << "}";
       return out;
     }
+
+    friend void swapKey(Node& n0, Node& n1) { swap(n0.key, n1.key); }
   };
   using SharedNode = shared_ptr<Node>;
   SharedNode root = nullptr;
@@ -101,7 +110,7 @@ class AVLTree {
     return Iterator({node});
   }
 
-  Iterator end() {
+  Iterator end() const {
     return Iterator({nullptr});
   }
 
@@ -228,9 +237,9 @@ class AVLTree {
     }
   }
 
-  bool insert_node(const Key& key, SharedNode node) {
+  bool insertImpl(const Key& key, SharedNode node) {
 
-    bool isLeft = key < node -> key;
+    bool isLeft = Cmp{}(key, node -> key);
     SharedNode child = isLeft ? node -> left : node -> right;
 
     if (child == nullptr) {
@@ -240,7 +249,7 @@ class AVLTree {
       cout << "Incing   " << *node << endl;
       return true;
     } else {
-      const bool incLevel = insert_node(key, child);
+      const bool incLevel = insertImpl(key, child);
       node -> sum += 1;
       if (incLevel) {
         node -> weight += isLeft ? -1 : 1;
@@ -265,21 +274,111 @@ class AVLTree {
       return;
     }
 
-    insert_node(key, n);
+    insertImpl(key, n);
+  }
+  private:
+  void sendDecreaseUp(SharedNode node, bool fromLeft) {
+    //TODO sum
+    if (node == nullptr) return;
+
+    SharedNode parent = node -> parent.lock();
+    node -> weight += -1 * (fromLeft ? -1 : 1);
+
+    cout << "Decrease " << *node << endl;
+    if (abs(node -> weight) == 2) {
+      cout << "Rotating " << *node << endl;
+      node = rotateNode(node);
+      cout << "Rot res  " << *node << endl;
+
+      if (node -> weight == 0)
+        sendDecreaseUp(parent, node -> isLeftChild());
+    } 
+    else if (node -> weight == 0)
+      sendDecreaseUp(parent, node -> isLeftChild());
   }
 
-  void printImpl(ostream& out, SharedNode node, size_t depth) {
-    if (node == nullptr) {
-      // out << "null" << endl;
-      return;
+  public:
+  void deleteNode(Iterator& iter) {
+    SharedNode node = iter.ptr;
+    cout << "Deleting " << iter -> key << endl;
+    bool isLeft = node -> isLeftChild();
+    SharedNode parent = node -> parent.lock();
+
+    if (node -> isList()) {
+      bool isLeft = node -> isLeftChild();
+      SharedNode parent = node -> parent.lock();
+
+      setChild(parent, SharedNode(), isLeft);
+      sendDecreaseUp(parent, isLeft);
+
+    } else if (node -> isFull()) {
+      Iterator sucIter = iter; ++sucIter;
+      SharedNode suc = sucIter.ptr;
+      swapKey(*node, *suc);
+      deleteNode(sucIter);
+    } else {
+      SharedNode child = node -> left != nullptr ? node -> left : node -> right;
+
+      setChild(parent, child, isLeft);
+      sendDecreaseUp(parent, isLeft);
     }
+  }
+
+  private:
+  Iterator lowerBoundImpl(const Key& key, const SharedNode node) const {
+    if (node == nullptr) return end();
+
+    cout << "Lowering " << *node << endl;
+    if (!Cmp{}(node -> key, key)) {
+      if (!Cmp{}(key, node -> key)) return Iterator{node};
+
+      const SharedNode left = node -> left;
+      if (left == nullptr) return Iterator{node};
+
+      return lowerBoundImpl(key, left);
+    } else {
+      return lowerBoundImpl(key, node -> right);
+    }
+  }
+
+  public:
+  Iterator lowerBound(const Key& key) const {
+    cout << "Lower    " << key << endl;
+    return lowerBoundImpl(key, root);
+  }
+
+  private:
+  Iterator upperBoundImpl(const Key& key, const SharedNode node) const {
+    if (node == nullptr) return end();
+
+    cout << "Uppering " << *node << endl;
+    if (!Cmp{}(key, node -> key)) {
+      if (!Cmp{}(node -> key, key)) return Iterator{node};
+
+      const SharedNode right = node -> right;
+      if (right == nullptr) return Iterator{node};
+
+      return upperBoundImpl(key, right);
+    } else {
+      return upperBoundImpl(key, node -> left);
+    }
+  }
+
+  public:
+  Iterator upperBound(const Key& key) const {
+    cout << "Upper    " << key << endl;
+    return upperBoundImpl(key, root);
+  }
+
+  void printImpl(ostream& out, SharedNode node, size_t depth) const {
+    if (node == nullptr) return;
     for (size_t i = 0;  i < depth; ++i) out << " ";
     out << *node << endl;
     printImpl(out, node -> left, depth + 1);
     printImpl(out, node -> right, depth + 1);
   }
 
-  void print(ostream& out = cout) { printImpl(out, root, 0); }
+  void print(ostream& out = cout) const { printImpl(out, root, 0); }
 };
 
 template<typename Product>
@@ -329,15 +428,15 @@ void treeTest() {
   //}
   //{
 
-  // Double right rotation
-  {
-    AVLTree<ssize_t> tree;
-    for (size_t i = 0; i < 20; ++i) {
-      tree.insert(i % 2 == 0 ? i / 2 : 19 - i / 2);
-      tree.print();
-    }
-    cout << "\n\n\n";
-  }
+  // Double right/left rotation
+  //{
+  //  AVLTree<ssize_t> tree;
+  //  for (size_t i = 0; i < 20; ++i) {
+  //    tree.insert(i % 2 == 0 ? i / 2 : 19 - i / 2);
+  //    tree.print();
+  //  }
+  //  cout << "\n\n\n";
+  //}
 
   // Iterator
   //  AVLTree<ssize_t> tree;
@@ -347,6 +446,21 @@ void treeTest() {
   //     cout << *itr << endl;
   //  cout << "\n\n\n";
   //}
+
+  // Delete
+  {
+    AVLTree<ssize_t> tree;
+    for (size_t i = 0; i < 20; ++i)
+      tree.insert(i);
+    tree.print();
+    for (size_t i = 1; i < 20; i += 3) {
+      auto bound = tree.lowerBound(i);
+      tree.deleteNode(bound);
+      tree.print();
+    }
+
+    cout << "\n\n\n";
+  }
 }
 
 // void test1() {
@@ -398,5 +512,4 @@ int main() {
 }
 
 #endif
-
 
