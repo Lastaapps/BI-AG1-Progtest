@@ -20,32 +20,38 @@
 
 using namespace std;
 
+template<typename T>
+ostream& operator<<(ostream& out, const shared_ptr<const T>& t) {
+  return (t == nullptr) ? out << "null" : out << *t;
+}
+
 template <typename Key, typename Cmp = less<Key>>
 class AVLTree {
   struct Node {
     using SharedNode = shared_ptr<Node>;
+
     Key key;
-    size_t sum = 0;
+    size_t sum = 1;
+    char weight = 0;
     SharedNode left = nullptr, right = nullptr;
     weak_ptr<Node> parent;
-    char weight = 0;
 
     Node(const Key& k) : key(k) {}
 
-    bool isLeftChild() const {
+    bool isLeftChild() const noexcept {
       const SharedNode lock = parent.lock();
       return lock == nullptr || lock -> left.get() == this;
     }
 
-    bool isList() const {
+    bool isList() const noexcept {
       return left == nullptr && right == nullptr;
     }
 
-    bool isFull() const {
+    bool isFull() const noexcept {
       return left != nullptr && right != nullptr;
     }
 
-    friend ostream& operator<<(ostream& out, const Node& node) {
+    friend ostream& operator<<(ostream& out, const Node& node) noexcept {
       const SharedNode p = node.parent.lock();
       const string pout = p == nullptr ? "null"s : to_string(p -> key);
       out << "{"
@@ -58,20 +64,23 @@ class AVLTree {
       return out;
     }
 
-    friend void swapKey(Node& n0, Node& n1) { swap(n0.key, n1.key); }
+    friend void swapKey(Node& n0, Node& n1) noexcept { 
+      swap(n0.key, n1.key);
+    }
   };
+
   using SharedNode = shared_ptr<Node>;
   SharedNode root = nullptr;
 
   struct Iterator {
     SharedNode ptr;
-    Node* operator->() {
+    Node* operator->() noexcept {
       return ptr.get();
     }
-    Node& operator*() {
+    Node& operator*() noexcept {
       return *ptr;
     }
-    void operator++() {
+    void operator++() noexcept {
       if (ptr -> right == nullptr) {
         while (ptr != nullptr) {
           const bool isNextLeft = ptr -> isLeftChild();
@@ -87,16 +96,16 @@ class AVLTree {
         }
       }
     }
-    bool operator==(const Iterator& other) {
+    bool operator==(const Iterator& other) noexcept {
       return ptr == other.ptr;
     }
-    bool operator!=(const Iterator& other) {
+    bool operator!=(const Iterator& other) noexcept {
       return ptr != other.ptr;
     }
   };
 
   public:
-  Iterator begin() {
+  Iterator begin() noexcept {
     if (root == nullptr)
       return Iterator({nullptr});
 
@@ -110,29 +119,68 @@ class AVLTree {
     return Iterator({node});
   }
 
-  Iterator end() const {
+  Iterator end() const noexcept {
     return Iterator({nullptr});
   }
 
-  private:
+  Iterator byIndexImpl(const size_t k, SharedNode node) noexcept {
+    if (node == nullptr) return end();
 
-  void setChild(SharedNode parent, SharedNode child, bool isLeft) {
+    const size_t lSum = safeSum(node -> left);
+    if (k < lSum) {
+      return byIndexImpl(k, node -> left);
+    } else if (k == lSum) {
+      return Iterator{node};
+    } else {
+      return byIndexImpl(k - lSum - 1, node -> right);
+    }
+  }
+
+  Iterator byIndex(const size_t index) noexcept {
+    return byIndexImpl(index, root);
+  }
+
+  size_t indexOfImpl(SharedNode node) {
+    SharedNode parent = node -> parent.lock();
+    if (parent == nullptr) return 0;
+
+    const bool isLeft = node -> isLeftChild();
+    return (isLeft ? 0 : safeSum(parent) - safeSum(node)) + indexOfImpl(parent);
+  }
+
+  size_t indexOf(Iterator iter) noexcept {
+    SharedNode node = iter.ptr;
+    return safeSum(node -> left) + indexOfImpl(node);
+  }
+
+  private:
+  void setChild(SharedNode parent, SharedNode child, bool isLeft) noexcept {
     if (parent != nullptr)
       (isLeft ? parent -> left : parent -> right) = child;
     else
       root = child;
 
-    if (child != nullptr) {
+    if (child != nullptr)
       child -> parent = parent;
-    }
   }
 
-  SharedNode rotateNode(SharedNode node) {
+  size_t nsum(SharedNode n) const noexcept {
+    return n != nullptr ? n -> sum : 0;
+  }
+
+  size_t reSum(SharedNode left, SharedNode right) const noexcept {
+    return nsum(left) + nsum(right) + 1;
+  }
+
+  size_t safeSum(SharedNode node) {
+    return (node == nullptr) ? 0 : node -> sum;
+  }
+
+  SharedNode rotateNode(SharedNode node) noexcept {
     const char weight = node -> weight;
     SharedNode parent = node -> parent.lock();
     const bool isLeft = node -> isLeftChild();
 
-    // TODO sum
     if (weight == 2) {
       SharedNode n1 = node;
       SharedNode n2 = n1 -> right;
@@ -157,6 +205,10 @@ class AVLTree {
         setChild(n2,  c, false);
         setChild(n1,  a, true);
         setChild(n1,  b, false);
+
+        n1 -> sum = reSum(a, b);
+        n2 -> sum = reSum(n1, c);
+
         return n2;
 
       } else {
@@ -181,6 +233,11 @@ class AVLTree {
         setChild(n1,  b, false);
         setChild(n2,  c, true);
         setChild(n2,  d, false);
+
+        n1 -> sum = reSum(a, b);
+        n2 -> sum = reSum(c, d);
+        n3 -> sum = reSum(n1, n2);
+
         return n3;
       }
     } else if (weight == -2) {
@@ -206,6 +263,10 @@ class AVLTree {
         setChild(n2,  c, true);
         setChild(n1,  a, false);
         setChild(n1,  b, true);
+
+        n1 -> sum = reSum(a, b);
+        n2 -> sum = reSum(n1, c);
+
         return n2;
 
       } else {
@@ -230,6 +291,11 @@ class AVLTree {
         setChild(n1,  b, true);
         setChild(n2,  c, false);
         setChild(n2,  d, true);
+
+        n1 -> sum = reSum(a, b);
+        n2 -> sum = reSum(c, d);
+        n3 -> sum = reSum(n1, n2);
+
         return n3;
       }
     } else {
@@ -237,7 +303,7 @@ class AVLTree {
     }
   }
 
-  bool insertImpl(const Key& key, SharedNode node) {
+  bool insertImpl(const Key& key, SharedNode node) noexcept {
 
     bool isLeft = Cmp{}(key, node -> key);
     SharedNode child = isLeft ? node -> left : node -> right;
@@ -245,9 +311,10 @@ class AVLTree {
     if (child == nullptr) {
       SharedNode toInsert = make_shared<Node>(key);
       setChild(node, toInsert, isLeft);
-      node -> weight += isLeft ? -1 : 1;
       cout << "Incing   " << *node << endl;
-      return true;
+      node -> weight += isLeft ? -1 : 1;
+      node -> sum += 1;
+      return node -> weight != 0;
     } else {
       const bool incLevel = insertImpl(key, child);
       node -> sum += 1;
@@ -265,7 +332,7 @@ class AVLTree {
   }
 
   public:
-  void insert(const Key& key) {
+  void insert(const Key& key) noexcept {
     cout << "Insert   " << key << endl;
     SharedNode n = root;
 
@@ -277,11 +344,15 @@ class AVLTree {
     insertImpl(key, n);
   }
   private:
-  void sendDecreaseUp(SharedNode node, bool fromLeft) {
-    //TODO sum
+  void sendDecreaseUp(SharedNode node, bool fromLeft, bool sumOnly) noexcept {
     if (node == nullptr) return;
 
     SharedNode parent = node -> parent.lock();
+    node -> sum -= 1;
+
+    if (sumOnly)
+      return sendDecreaseUp(parent, false, true);
+
     node -> weight += -1 * (fromLeft ? -1 : 1);
 
     cout << "Decrease " << *node << endl;
@@ -291,14 +362,16 @@ class AVLTree {
       cout << "Rot res  " << *node << endl;
 
       if (node -> weight == 0)
-        sendDecreaseUp(parent, node -> isLeftChild());
+        sendDecreaseUp(parent, node -> isLeftChild(), false);
     } 
     else if (node -> weight == 0)
-      sendDecreaseUp(parent, node -> isLeftChild());
+      sendDecreaseUp(parent, node -> isLeftChild(), false);
+    else
+      sendDecreaseUp(parent, false, true);
   }
 
   public:
-  void deleteNode(Iterator& iter) {
+  void deleteNode(Iterator& iter) noexcept {
     SharedNode node = iter.ptr;
     cout << "Deleting " << iter -> key << endl;
     bool isLeft = node -> isLeftChild();
@@ -309,7 +382,7 @@ class AVLTree {
       SharedNode parent = node -> parent.lock();
 
       setChild(parent, SharedNode(), isLeft);
-      sendDecreaseUp(parent, isLeft);
+      sendDecreaseUp(parent, isLeft, false);
 
     } else if (node -> isFull()) {
       Iterator sucIter = iter; ++sucIter;
@@ -320,12 +393,12 @@ class AVLTree {
       SharedNode child = node -> left != nullptr ? node -> left : node -> right;
 
       setChild(parent, child, isLeft);
-      sendDecreaseUp(parent, isLeft);
+      sendDecreaseUp(parent, isLeft, false);
     }
   }
 
   private:
-  Iterator lowerBoundImpl(const Key& key, const SharedNode node) const {
+  Iterator lowerBoundImpl(const Key& key, const SharedNode node) const noexcept {
     if (node == nullptr) return end();
 
     cout << "Lowering " << *node << endl;
@@ -342,13 +415,13 @@ class AVLTree {
   }
 
   public:
-  Iterator lowerBound(const Key& key) const {
+  Iterator lowerBound(const Key& key) const noexcept {
     cout << "Lower    " << key << endl;
     return lowerBoundImpl(key, root);
   }
 
   private:
-  Iterator upperBoundImpl(const Key& key, const SharedNode node) const {
+  Iterator upperBoundImpl(const Key& key, const SharedNode node) const noexcept {
     if (node == nullptr) return end();
 
     cout << "Uppering " << *node << endl;
@@ -365,12 +438,16 @@ class AVLTree {
   }
 
   public:
-  Iterator upperBound(const Key& key) const {
+  Iterator upperBound(const Key& key) const noexcept {
     cout << "Upper    " << key << endl;
     return upperBoundImpl(key, root);
   }
 
-  void printImpl(ostream& out, SharedNode node, size_t depth) const {
+  size_t size() const noexcept {
+    return root != nullptr ? root -> sum : 0;
+  }
+
+  void printImpl(ostream& out, SharedNode node, size_t depth) const noexcept {
     if (node == nullptr) return;
     for (size_t i = 0;  i < depth; ++i) out << " ";
     out << *node << endl;
@@ -378,7 +455,7 @@ class AVLTree {
     printImpl(out, node -> right, depth + 1);
   }
 
-  void print(ostream& out = cout) const { printImpl(out, root, 0); }
+  void print(ostream& out = cout) const noexcept { printImpl(out, root, 0); }
 };
 
 template<typename Product>
@@ -448,19 +525,31 @@ void treeTest() {
   //}
 
   // Delete
-  {
-    AVLTree<ssize_t> tree;
-    for (size_t i = 0; i < 20; ++i)
-      tree.insert(i);
-    tree.print();
-    for (size_t i = 1; i < 20; i += 3) {
-      auto bound = tree.lowerBound(i);
-      tree.deleteNode(bound);
-      tree.print();
-    }
+  //{
+  //  AVLTree<ssize_t> tree;
+  //  for (size_t i = 0; i < 20; ++i)
+  //    tree.insert(i);
+  //  tree.print();
+  //  for (size_t i = 1; i < 20; i += 3) {
+  //    auto bound = tree.lowerBound(i);
+  //    tree.deleteNode(bound);
+  //    tree.print();
+  //  }
+  //  cout << "\n\n\n";
+  //}
 
-    cout << "\n\n\n";
-  }
+  // By index
+  //{
+  //  AVLTree<ssize_t> tree;
+  //  for (size_t i = 0; i < 20; ++i)
+  //    tree.insert(i);
+  //  tree.print();
+  //  for (size_t i = 0; i < 20; ++i)
+  //    cout << i << ": " << *tree.byIndex(i) << endl;
+  //  for (size_t i = 0; i < 20; ++i)
+  //    cout << i << ": " << tree.indexOf(tree.byIndex(i)) << endl;
+  //  cout << "\n\n\n";
+  //}
 }
 
 // void test1() {
