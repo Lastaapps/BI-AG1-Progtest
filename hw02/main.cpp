@@ -16,6 +16,12 @@
 #include <queue>
 #include <random>
 
+#define COUT if constexpr (true) cout
+
+#elif
+
+#define COUT if constexpr (false) cout
+
 #endif
 
 using namespace std;
@@ -25,45 +31,54 @@ ostream& operator<<(ostream& out, const shared_ptr<const T>& t) noexcept {
   return (t == nullptr) ? out << "null" : out << *t;
 }
 
+
+// --- BaseNode ---------------------------------------------------------------
+/** Gets nodes sum or 0 for an empty node*/
 template<typename U>
 size_t safeSum(const shared_ptr<const U>& node) noexcept {
   return (node == nullptr) ? 0 : node -> sum;
 }
 
-template<typename U>
-size_t safeProdSum(const shared_ptr<const U>& node) noexcept {
-  return (node == nullptr) ? 0 : node -> sellSum;
-}
-
+/** Base node implementation so I can keep  this for the future */
 template<typename Key>
 struct BaseNode {
   using SharedNode = shared_ptr<BaseNode>;
 
   Key key;
+  // number of children plus 1 for this node
   size_t sum = 1;
+  // +1 if right node has more levels, -1 for left and 0 for equality
   char weight = 0;
+  // children in a tree
   SharedNode left = nullptr, right = nullptr;
+  // a parent in a tree
   weak_ptr<BaseNode> parent;
 
   BaseNode(const Key& k) noexcept : key(k) {};
+  virtual ~BaseNode(){};
 
+  /** If this node is a left child of it's parent of it is root */
   bool isLeftChild() const noexcept {
     const SharedNode lock = parent.lock();
     return lock == nullptr || lock -> left.get() == this;
   }
 
+  /** If the node is list, e.g. has no children */
   bool isList() const noexcept {
     return left == nullptr && right == nullptr;
   }
 
+  /** If the node has 2 children */
   bool isFull() const noexcept {
     return left != nullptr && right != nullptr;
   }
 
-  void reSum() noexcept {
+  /** Recomputes sum property */
+  virtual void reSum() noexcept {
     sum = safeSum<BaseNode>(left) + safeSum<BaseNode>(right) + 1;
   }
 
+  /** Prints the node out */
   friend ostream& operator<<(ostream& out, const BaseNode& node) noexcept {
     const SharedNode p = node.parent.lock();
     out << "{"
@@ -77,61 +92,117 @@ struct BaseNode {
     return out;
   }
 
+  // product count may have to be recalculated, not in the base class
+  virtual void onKeyChanged() noexcept {}
+
+  /** Exchanges key with another node */
   friend void swapKey(BaseNode& n0, BaseNode& n1) noexcept { 
     swap(n0.key, n1.key);
-    n0.reSum();
-    n1.reSum();
+    n0.onKeyChanged();
+    n1.onKeyChanged();
   }
 };
 
 
+
+// --- Holder -----------------------------------------------------------------
+/** Compares nodes according to this assignment, using greatest */
+template <typename Holder>
+struct HolderCmp final {
+  bool operator()(const Holder& h0, const Holder& h1) const noexcept {
+    return
+      h0.items > h1.items ? true :
+      h0.items < h1.items ? false :
+      h0.isLowest < h1.isLowest ? true :
+      h0.isLowest > h1.isLowest ? false :
+      h0.data < h1.data;
+  }
+};
+
+/** Gets nodes product count or 0 for an empty node */
+template<typename U>
+size_t safeProdSum(const shared_ptr<const U>& node) noexcept {
+  return (node == nullptr) ? 0 : node -> sellSum;
+}
+
+/** Node content for this assignment */
 template <typename Prod>
-struct Holder {
+struct Holder final {
+  // number of items sold
   const size_t items = 0;
+  // to make lower/upper bound easier
+  const bool isLowest = false;
+  // sold product
   const Prod data;
-
-  bool operator<(const Holder& other) const noexcept {
-    return items < other.items ? true 
-      : items > other.items ? false 
-      : data < other.data;
-  }
 };
 
-template <typename Key>
-struct ProdNode final : public BaseNode<Holder<Key>> {
-  using HKey = Holder<Key>;
+/** Holds holder in the tree, adds sold sums */
+template <typename Prod>
+struct ProdNode final : public BaseNode<Holder<Prod>> {
+  using HKey = Holder<Prod>;
+  // number of items sold in subtrees and in this node
   size_t sellSum;
 
-  ProdNode(const Key& key) noexcept : BaseNode<HKey>(key), sellSum(key.items) {}
+  ProdNode(const Prod& key) noexcept : BaseNode<HKey>(key), sellSum(key.items) {}
 
-  void reSum() noexcept {
+  /** Also resums the number of products sold */
+  void reSum() noexcept override {
     BaseNode<HKey>::reSum();
     sellSum = BaseNode<HKey>::key.items + safeProdSum<HKey>(left) + safeProdSum<HKey>(right);
   }
+
+  void onKeyChanged() noexcept override {
+    // product count may have to be recalculated
+    reSum();
+    // update patents
+    const auto p = BaseNode<HKey>::parent.lock();
+    if (p != nullptr) p -> reSum();
+  }
 };
 
+
+
+// --- AVL tree ---------------------------------------------------------------
 template <typename Key, typename Node = BaseNode<Key>, typename Cmp = less<Key>>
 class AVLTree {
 
   using SharedNode = shared_ptr<Node>;
+  using SharedConstNode = shared_ptr<const Node>;
+
+  // tree root node
   SharedNode root = nullptr;
 
+  // comparator instance
+  const Cmp cmp = {};
+
+
+  // iterates ower the tree
   struct Iterator {
-    SharedNode ptr;
-    Node* operator->() noexcept {
-      return ptr.get();
+    SharedConstNode ptr;
+
+    SharedNode unsafePtr() noexcept {
+      return const_pointer_cast<Node>(ptr);
     }
-    Node& operator*() noexcept {
-      return *ptr;
-    }
+    Node* operator->() noexcept { return unsafePtr().get(); }
+    Node& operator*() noexcept { return *unsafePtr(); }
+
+    const Node* operator->() const noexcept { return ptr.get(); }
+    const Node& operator*() const noexcept { return *ptr; }
+
+    bool operator==(const Iterator& other) const noexcept { return ptr == other.ptr; }
+    bool operator!=(const Iterator& other) const noexcept { return ptr != other.ptr; }
+
+    /** successor */
     void operator++() noexcept {
       if (ptr -> right == nullptr) {
+        // find the first parent in the right
         while (ptr != nullptr) {
           const bool isNextLeft = ptr -> isLeftChild();
           ptr = ptr -> parent.lock();
           if (isNextLeft) break;
         }
       } else {
+        // find the first on the right and then go left
         ptr = ptr -> right;
         while (true) {
           SharedNode next = ptr -> left;
@@ -140,15 +211,10 @@ class AVLTree {
         }
       }
     }
-    bool operator==(const Iterator& other) noexcept {
-      return ptr == other.ptr;
-    }
-    bool operator!=(const Iterator& other) noexcept {
-      return ptr != other.ptr;
-    }
   };
 
   public:
+  /** Iterator to the first tree item */
   Iterator begin() noexcept {
     if (root == nullptr)
       return Iterator({nullptr});
@@ -163,10 +229,13 @@ class AVLTree {
     return Iterator({node});
   }
 
-  Iterator end() const noexcept {
-    return Iterator({nullptr});
-  }
+  /** Iterator after the end of the tree */
+  Iterator end() const noexcept { return Iterator({nullptr}); }
 
+
+
+  private:
+  /** Gets item in the tree by it's index */
   Iterator byIndexImpl(const size_t k, SharedNode node) noexcept {
     if (node == nullptr) return end();
 
@@ -180,10 +249,16 @@ class AVLTree {
     }
   }
 
+  public:
+  /** Gets item in the tree by it's index */
   Iterator byIndex(const size_t index) noexcept {
     return byIndexImpl(index, root);
   }
 
+
+
+  private:
+  /** Gets index of an item in the tree */
   size_t indexOfImpl(SharedNode node) {
     SharedNode parent = node -> parent.lock();
     if (parent == nullptr) return 0;
@@ -192,12 +267,20 @@ class AVLTree {
     return (isLeft ? 0 : safeSum<Node>(parent) - safeSum<Node>(node)) + indexOfImpl(parent);
   }
 
+  public:
+  /** Gets index of an item in the tree */
   size_t indexOf(Iterator iter) noexcept {
     SharedNode node = iter.ptr;
     return safeSum<Node>(node -> left) + indexOfImpl(node);
   }
 
+
+
   private:
+  /** Connects parent and a child together.
+   * No recalculation is done.
+   * If parent is nullptr, child is set as the tree root
+   */
   void setChild(SharedNode parent, SharedNode child, bool isLeft) noexcept {
     if (parent != nullptr)
       (isLeft ? parent -> left : parent -> right) = child;
@@ -208,21 +291,25 @@ class AVLTree {
       child -> parent = parent;
   }
 
+  /** Handles all the awl rotations based on the node weight */
   SharedNode rotateNode(SharedNode node) noexcept {
+
     const char weight = node -> weight;
-    SharedNode parent = node -> parent.lock();
+    const SharedNode parent = node -> parent.lock();
     const bool isLeft = node -> isLeftChild();
 
     if (weight == 2) {
-      SharedNode n1 = node;
-      SharedNode n2 = n1 -> right;
-      // right rotation
+
+      const SharedNode n1 = node;
+      const SharedNode n2 = n1 -> right;
+
+      // right rotations
       if (n2 -> weight != -1) {
         // simple rotation
-        cout << "Simple right rotation" << endl;
-        SharedNode a  = n1 -> left;
-        SharedNode b  = n2 -> left;
-        SharedNode c  = n2 -> right;
+        COUT << "Simple right rotation" << endl;
+        const SharedNode a  = n1 -> left;
+        const SharedNode b  = n2 -> left;
+        const SharedNode c  = n2 -> right;
 
         if (n2 -> weight == 0) {
           n1 -> weight = 1;
@@ -245,14 +332,12 @@ class AVLTree {
 
       } else {
         // double rotation
-        cout << "Double right rotation" << endl;
-        SharedNode n1 = node;
-        SharedNode n2 = node -> right;
-        SharedNode n3 = n2 -> left;
-        SharedNode a  = n1 -> left;
-        SharedNode b  = n3 -> left;
-        SharedNode c  = n3 -> right;
-        SharedNode d  = n2 -> right;
+        COUT << "Double right rotation" << endl;
+        const SharedNode n3 = n2 -> left;
+        const SharedNode a  = n1 -> left;
+        const SharedNode b  = n3 -> left;
+        const SharedNode c  = n3 -> right;
+        const SharedNode d  = n2 -> right;
 
         n1 -> weight = n3 -> weight == 1 ? 1 : 0;
         n2 -> weight = n3 -> weight == -1 ? -1 : 0;
@@ -272,12 +357,16 @@ class AVLTree {
 
         return n3;
       }
+
+    // left rotations
     } else if (weight == -2) {
-      SharedNode n1 = node;
-      SharedNode n2 = n1 -> left;
+
+      const SharedNode n1 = node;
+      const SharedNode n2 = n1 -> left;
+
       if (n2 -> weight != 1) {
         // simple rotation
-        cout << "Simple left rotation" << endl;
+        COUT << "Simple left rotation" << endl;
         SharedNode a  = n1 -> right;
         SharedNode b  = n2 -> right;
         SharedNode c  = n2 -> left;
@@ -303,14 +392,12 @@ class AVLTree {
 
       } else {
         // double rotation
-        cout << "Double left rotation" << endl;
-        SharedNode n1 = node;
-        SharedNode n2 = node -> left;
-        SharedNode n3 = n2 -> right;
-        SharedNode a  = n1 -> right;
-        SharedNode b  = n3 -> right;
-        SharedNode c  = n3 -> left;
-        SharedNode d  = n2 -> left;
+        COUT << "Double left rotation" << endl;
+        const SharedNode n3 = n2 -> right;
+        const SharedNode a  = n1 -> right;
+        const SharedNode b  = n3 -> right;
+        const SharedNode c  = n3 -> left;
+        const SharedNode d  = n2 -> left;
 
         n1 -> weight = n3 -> weight == -1 ? -1 : 0;
         n2 -> weight = n3 -> weight == 1 ? 1 : 0;
@@ -337,15 +424,19 @@ class AVLTree {
     }
   }
 
+
+
+  private:
+  /** Inserts a new item into the tree, key mas be unique */
   bool insertImpl(const Key& key, SharedNode node) noexcept {
 
-    bool isLeft = Cmp{}(key, node -> key);
-    SharedNode child = isLeft ? node -> left : node -> right;
+    const bool isLeft = cmp(key, node -> key);
+    const SharedNode child = isLeft ? node -> left : node -> right;
 
     if (child == nullptr) {
       SharedNode toInsert = make_shared<Node>(key);
       setChild(node, toInsert, isLeft);
-      cout << "Incing   " << *node << endl;
+      COUT << "Incing   " << *node << endl;
       node -> weight += isLeft ? -1 : 1;
       node -> reSum();
       return node -> weight != 0;
@@ -354,11 +445,11 @@ class AVLTree {
       node -> reSum();
       if (incLevel) {
         node -> weight += isLeft ? -1 : 1;
-        cout << "Incing   " << *node << endl;
+        COUT << "Incing   " << *node << endl;
         if (abs(node -> weight) == 2) {
-          cout << "Rotating " << *node << endl;
+          COUT << "Rotating " << *node << endl;
           node = rotateNode(node);
-          cout << "Rot res  " << *node << endl;
+          COUT << "Rot res  " << *node << endl;
         }
       }
       return node -> weight != 0 && incLevel;
@@ -366,34 +457,40 @@ class AVLTree {
   }
 
   public:
+  /** Inserts a new item into the tree, key mas be unique */
   void insert(const Key& key) noexcept {
-    cout << "Insert   " << key << endl;
-    SharedNode n = root;
+    COUT << "Insert   " << key << endl;
+    const SharedNode n = root;
 
-    if (n == nullptr) {
+    if (n == nullptr)
+      // insert root
       root = make_shared<Node>(key);
-      return;
-    }
-
-    insertImpl(key, n);
+    else
+      // insert new node
+      insertImpl(key, n);
   }
+
+
+
   private:
-  void sendDecreaseUp(SharedNode node, bool fromLeft, bool sumOnly) noexcept {
+  /** Propagates info about node deletion to it's parents */
+  void sendDecreaseUp(const SharedNode node, const bool fromLeft, const bool sumOnly) noexcept {
     if (node == nullptr) return;
 
-    SharedNode parent = node -> parent.lock();
+    const SharedNode parent = node -> parent.lock();
     node -> reSum();
 
     if (sumOnly)
       return sendDecreaseUp(parent, false, true);
 
+    // add node decrease info, inverse of insert
     node -> weight += -1 * (fromLeft ? -1 : 1);
 
-    cout << "Decrease " << *node << endl;
+    COUT << "Decrease " << *node << endl;
     if (abs(node -> weight) == 2) {
-      cout << "Rotating " << *node << endl;
+      COUT << "Rotating " << *node << endl;
       node = rotateNode(node);
-      cout << "Rot res  " << *node << endl;
+      COUT << "Rot res  " << *node << endl;
 
       if (node -> weight == 0)
         sendDecreaseUp(parent, node -> isLeftChild(), false);
@@ -401,43 +498,53 @@ class AVLTree {
     else if (node -> weight == 0)
       sendDecreaseUp(parent, node -> isLeftChild(), false);
     else
+      // no further weights updates, just resuming
       sendDecreaseUp(parent, false, true);
   }
 
+
+
   public:
+  // 
   void deleteNode(Iterator& iter) noexcept {
-    SharedNode node = iter.ptr;
-    cout << "Deleting " << iter -> key << endl;
-    bool isLeft = node -> isLeftChild();
-    SharedNode parent = node -> parent.lock();
+    const SharedNode node = iter.ptr;
+    const bool isLeft = node -> isLeftChild();
+    const SharedNode parent = node -> parent.lock();
+    COUT << "Deleting " << iter -> key << endl;
 
     if (node -> isList()) {
-      bool isLeft = node -> isLeftChild();
-      SharedNode parent = node -> parent.lock();
+      // Delete list
+      const bool isLeft = node -> isLeftChild();
+      const SharedNode parent = node -> parent.lock();
 
       setChild(parent, SharedNode(), isLeft);
       sendDecreaseUp(parent, isLeft, false);
 
     } else if (node -> isFull()) {
+      // Delete node with 2 children
       Iterator sucIter = iter; ++sucIter;
-      SharedNode suc = sucIter.ptr;
+      const SharedNode suc = sucIter.ptr;
       swapKey(*node, *suc);
       deleteNode(sucIter);
     } else {
-      SharedNode child = node -> left != nullptr ? node -> left : node -> right;
+      // Delete node with 1 child
+      const SharedNode child = node -> left != nullptr ? node -> left : node -> right;
 
       setChild(parent, child, isLeft);
       sendDecreaseUp(parent, isLeft, false);
     }
   }
+  
+
 
   private:
+  /** Finds the lower bound for the key given */
   Iterator lowerBoundImpl(const Key& key, const SharedNode node) const noexcept {
     if (node == nullptr) return end();
 
-    cout << "Lowering " << *node << endl;
-    if (!Cmp{}(node -> key, key)) {
-      if (!Cmp{}(key, node -> key)) return Iterator{node};
+    COUT << "Lowering " << *node << endl;
+    if (!cmp(node -> key, key)) {
+      if (!cmp(key, node -> key)) return Iterator{node};
 
       const SharedNode left = node -> left;
       if (left == nullptr) return Iterator{node};
@@ -449,18 +556,23 @@ class AVLTree {
   }
 
   public:
+  /** Finds the lower bound for the key given */
   Iterator lowerBound(const Key& key) const noexcept {
-    cout << "Lower    " << key << endl;
+    COUT << "Lower    " << key << endl;
     return lowerBoundImpl(key, root);
   }
 
+
+
   private:
+  /** Finds the item before upper bound */
+  // TODO reimplement to support correct upper bound
   Iterator upperBoundImpl(const Key& key, const SharedNode node) const noexcept {
     if (node == nullptr) return end();
 
-    cout << "Uppering " << *node << endl;
-    if (!Cmp{}(key, node -> key)) {
-      if (!Cmp{}(node -> key, key)) return Iterator{node};
+    COUT << "Uppering " << *node << endl;
+    if (!cmp(key, node -> key)) {
+      if (!cmp(node -> key, key)) return Iterator{node};
 
       const SharedNode right = node -> right;
       if (right == nullptr) return Iterator{node};
@@ -472,15 +584,45 @@ class AVLTree {
   }
 
   public:
+  /** Finds the item before upper bound */
   Iterator upperBound(const Key& key) const noexcept {
-    cout << "Upper    " << key << endl;
+    COUT << "Upper    " << key << endl;
     return upperBoundImpl(key, root);
   }
 
-  size_t size() const noexcept {
-    return root != nullptr ? root -> sum : 0;
+
+
+  private:
+  /** Finds the first common ancestor of two tree nodes */
+  Iterator commonAncestorImpl(const Key& k0, const Key& k1, const SharedConstNode node) const noexcept {
+    const Key& key = node -> key;
+    const bool cmp0 = cmp(k0, key);
+    const bool cmp1 = cmp(k1, key);
+    COUT << "Ancestor " << key << " " << cmp0 << ":" << cmp1 << endl;
+
+    if (cmp0 != cmp1 || k0 == key || k1 == key)
+      return Iterator{node};
+
+    return commonAncestorImpl(k0, k1, cmp0 ? node -> left : node -> right);
   }
 
+  public:
+  /** Finds the first common ancestor of two tree nodes */
+  Iterator commonAncestor(const Iterator i0, const Iterator i1) const noexcept {
+    COUT << "Common   " << i0.ptr << " " << i1.ptr << endl;
+    if (i0 == end() || i1 == end()) return end();
+    if (i0 == i1) return i0;
+    return commonAncestorImpl(i0 -> key, i1 -> key, root);
+  }
+
+
+  /** Returns the number of nodes in the tree */
+  size_t size() const noexcept { return root != nullptr ? root -> sum : 0; }
+
+
+
+  private:
+  /** Prints all the nodes in the tree with indentation representing the internal structure */
   void printImpl(ostream& out, SharedNode node, size_t depth) const noexcept {
     if (node == nullptr) return;
     for (size_t i = 0;  i < depth; ++i) out << " ";
@@ -489,6 +631,8 @@ class AVLTree {
     printImpl(out, node -> right, depth + 1);
   }
 
+  public:
+  /** Prints all the nodes in the tree with indentation representing the internal structure */
   void print(ostream& out = cout) const noexcept { printImpl(out, root, 0); }
 };
 
@@ -576,15 +720,30 @@ void treeTest() {
   //}
 
   // By index
+  //{
+  //  AVLTree<ssize_t> tree;
+  //  for (size_t i = 0; i < 20; ++i)
+  //    tree.insert(i);
+  //  tree.print();
+  //  for (size_t i = 0; i < 20; ++i)
+  //    cout << i << ": " << *tree.byIndex(i) << endl;
+  //  for (size_t i = 0; i < 20; ++i)
+  //    cout << i << ": " << tree.indexOf(tree.byIndex(i)) << endl;
+  //  cout << "\n\n\n";
+  //}
+
+  // Common ancestor
   {
     AVLTree<ssize_t> tree;
-    for (size_t i = 0; i < 20; ++i)
-      tree.insert(i);
+    for (size_t i = 0; i < 20; ++i) tree.insert(i);
     tree.print();
-    for (size_t i = 0; i < 20; ++i)
-      cout << i << ": " << *tree.byIndex(i) << endl;
-    for (size_t i = 0; i < 20; ++i)
-      cout << i << ": " << tree.indexOf(tree.byIndex(i)) << endl;
+    assert(tree.commonAncestor(tree.lowerBound(19), tree.lowerBound(6)) -> key == 7);
+    assert(tree.commonAncestor(tree.lowerBound(14), tree.lowerBound(8)) -> key == 11);
+    assert(tree.commonAncestor(tree.lowerBound(4), tree.lowerBound(6)) -> key == 5);
+    assert(tree.commonAncestor(tree.lowerBound(19), tree.lowerBound(12)) -> key == 15);
+    assert(tree.commonAncestor(tree.lowerBound(19), tree.lowerBound(17)) -> key == 17);
+    assert(tree.commonAncestor(tree.lowerBound(17), tree.lowerBound(19)) -> key == 17);
+    assert(tree.commonAncestor(tree.lowerBound(8), tree.lowerBound(8)) -> key == 8);
     cout << "\n\n\n";
   }
 }
