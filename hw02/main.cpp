@@ -18,7 +18,7 @@
 
 #define COUT if constexpr (true) cout
 
-#elif
+#else
 
 #define COUT if constexpr (false) cout
 
@@ -26,10 +26,10 @@
 
 using namespace std;
 
-template<typename T>
-ostream& operator<<(ostream& out, const shared_ptr<const T>& t) noexcept {
-  return (t == nullptr) ? out << "null" : out << *t;
-}
+// template<typename T>
+// ostream& operator<<(ostream& out, const shared_ptr<const T>& t) noexcept {
+//   return (t == nullptr) ? out << "null" : out << *t;
+// }
 // --- BaseNode ---------------------------------------------------------------
 /** Gets nodes sum or 0 for an empty node*/
 template<typename U>
@@ -195,14 +195,14 @@ class AVLTree {
 
   public:
   /** Iterator to the first tree item */
-  Iterator begin() noexcept {
+  Iterator begin() const noexcept {
     if (root == nullptr)
       return Iterator({nullptr});
 
     SharedNode node = root;
     while (true) {
       SharedNode next = node -> left;
-      if (next -> left == nullptr)
+      if (next == nullptr)
         break;
       node = next;
     }
@@ -319,8 +319,8 @@ class AVLTree {
         const SharedNode c  = n3 -> right;
         const SharedNode d  = n2 -> right;
 
-        n1 -> weight = n3 -> weight == 1 ? 1 : 0;
-        n2 -> weight = n3 -> weight == -1 ? -1 : 0;
+        n1 -> weight = n3 -> weight ==  1 ? -1 : 0;
+        n2 -> weight = n3 -> weight == -1 ?  1 : 0;
         n3 -> weight = 0;
 
         setChild(parent, n3, isLeft);
@@ -379,8 +379,8 @@ class AVLTree {
         const SharedNode c  = n3 -> left;
         const SharedNode d  = n2 -> left;
 
-        n1 -> weight = n3 -> weight == -1 ? -1 : 0;
-        n2 -> weight = n3 -> weight == 1 ? 1 : 0;
+        n1 -> weight = n3 -> weight == -1 ?  1 : 0;
+        n2 -> weight = n3 -> weight ==  1 ? -1 : 0;
         n3 -> weight = 0;
 
         setChild(parent, n3, isLeft);
@@ -401,6 +401,7 @@ class AVLTree {
 #ifndef __PROGTEST__
       throw runtime_error("You fucked up!");
 #endif
+      return node;
     }
   }
 
@@ -462,8 +463,10 @@ class AVLTree {
     const SharedNode parent = node -> parent.lock();
     node -> reSum();
 
-    if (sumOnly)
+    if (sumOnly) {
+      COUT << "Updated  " << *node << endl;
       return sendDecreaseUp(parent, false, true);
+    }
 
     // add node decrease info, inverse of insert
     node -> weight += -1 * (fromLeft ? -1 : 1);
@@ -476,6 +479,8 @@ class AVLTree {
 
       if (node -> weight == 0)
         sendDecreaseUp(parent, node -> isLeftChild(), false);
+      else
+        sendDecreaseUp(parent, false, true);
     } 
     else if (node -> weight == 0)
       sendDecreaseUp(parent, node -> isLeftChild(), false);
@@ -520,6 +525,9 @@ class AVLTree {
       setChild(s, dl, true);
       setChild(s, dr, false);
     }
+    swap(s -> weight, d -> weight);
+    sendDecreaseUp(s, false, true); // just resum
+    sendDecreaseUp(d, false, true); // just resum
   }
 
   public:
@@ -542,9 +550,11 @@ class AVLTree {
       // Delete node with 2 children
       Iterator sucIter = iter;
       ++sucIter;
+      COUT << "Switch   " << sucIter -> key << endl;
       switchNodes(iter.unsafePtr(), sucIter.unsafePtr());
+      COUT << "S res it " << *(iter.ptr) << endl;
+      COUT << "S res sc " << *(sucIter.ptr) << endl;
       deleteNode(iter);
-      sendDecreaseUp(sucIter.unsafePtr(), isLeft, true); // just resum
     } else {
       // Delete node with 1 child
       const SharedNode child = node -> left != nullptr ? node -> left : node -> right;
@@ -687,6 +697,110 @@ class AVLTree {
   /** Prints all the nodes in the tree with indentation representing the internal structure */
   void print(ostream& out = cout) const noexcept { printImpl(out, root, 0); }
 
+  private:
+  void checkParentChildPointers() const {
+    bool rootFound = false;
+    size_t nodesFound = 0;
+    for (auto itr = begin(); itr != end(); ++itr) {
+      const SharedConstNode node = itr.ptr;
+      const SharedConstNode parent = node -> parent.lock();
+      const SharedConstNode left  = node -> left;
+      const SharedConstNode right = node -> right;
+
+      if (parent == nullptr) {
+        if (rootFound)
+          throw runtime_error("Second root found!");
+        rootFound = true;
+      } else {
+        if (!(parent -> left == node || parent -> right == node)) {
+          COUT << "Child/Parent mismatch for " << node -> key.data << endl;
+          throw runtime_error("Parent/Child mismatch");
+        }
+      }
+      if (left != nullptr && left -> parent.lock() != node) {
+          COUT << "Parent/Child mismatch for " << node -> key.data << endl;
+          throw runtime_error("Parent/Child mismatch");
+      }
+      if (right != nullptr && right -> parent.lock() != node) {
+          COUT << "Parent/Child mismatch for " << node -> key.data << endl;
+          throw runtime_error("Parent/Child mismatch");
+      }
+
+      ++nodesFound;
+    }
+    if (nodesFound != size()) {
+          COUT << "Number of node/Sum mismatch " << nodesFound << " " << size() << endl;
+          throw runtime_error("Number of node/Sum mismatch");
+    }
+  }
+
+  size_t weightTest(const SharedConstNode node) const {
+    if (node == nullptr) return 0;
+    const ssize_t l = weightTest(node -> left);
+    const ssize_t r = weightTest(node -> right);
+    const ssize_t sum =  r - l;
+    if (sum != node -> weight) {
+      COUT << "Weight assertion failed for " << node -> key << ", has " << (int)node -> weight << ", got " << sum << endl;
+      throw runtime_error("Weight assertion failed");
+    }
+    return 1 + (l > r ? l : r);
+  }
+
+  size_t sumsTest(const SharedConstNode node) const {
+    if (node == nullptr) return 0;
+    const ssize_t l = sumsTest(node -> left);
+    const ssize_t r = sumsTest(node -> right);
+    const size_t sum =  l + r + 1;
+    if (sum != node -> sum) {
+      COUT << "Sum assertion failed for " << node -> key << endl;
+      throw runtime_error("Sum assertion failed");
+    }
+    return sum;
+  }
+
+  size_t prodSumsTest(const SharedConstNode node) const {
+    if (node == nullptr) return 0;
+    const ssize_t l = prodSumsTest(node -> left);
+    const ssize_t r = prodSumsTest(node -> right);
+    const size_t sum =  l + r + node -> key.items;
+    if (sum != node -> sellSum) {
+      COUT << "Sell sum assertion failed for " << node -> key << endl;
+      throw runtime_error("Sell sum assertion failed");
+    }
+    return sum;
+  }
+
+  void compareTest(const SharedConstNode node) const {
+      if (node == nullptr) return;
+      const SharedConstNode left  = node -> left;
+      const SharedConstNode right = node -> right;
+
+      if (left != nullptr) {
+        if(!cmp(left -> key, node -> key)) {
+          COUT << "Compare assertion failed for " << node -> key << endl;
+          throw runtime_error("Compare assertion failed");
+        }
+        compareTest(left);
+      }
+
+      if (right != nullptr) {
+        if(!cmp(node -> key, right -> key)) {
+          COUT << "Compare assertion failed for " << node -> key << endl;
+          throw runtime_error("Compare assertion failed");
+        }
+        compareTest(right);
+      }
+  }
+
+  public:
+  void validate() const {
+    checkParentChildPointers();
+    sumsTest(root);
+    prodSumsTest(root);
+    compareTest(root);
+    weightTest(root);
+  }
+
   template<typename Product>
   friend struct Bestsellers;
 };
@@ -701,8 +815,8 @@ struct Bestsellers {
   Tree tree;
   Map map;
 
-  void throwNotFound() const {
-    throw std::out_of_range("Index is out of range or item not found");
+  void throwIndexOutOf(size_t index) const {
+    throw std::out_of_range("Index is out of range: "s + to_string(index));
   }
 
   public:
@@ -719,19 +833,20 @@ struct Bestsellers {
       const size_t prevSum = prev -> key.items;
       tree.deleteNode(prev);
       const auto itr = tree.insert(PHolder(amount + prevSum, p));
-      map.emplace(p, itr);
+      map.insert_or_assign(p, itr);
     }
   }
 
   // The most sold product has rank 1
   size_t rank(const Product& p) const {
     const auto res = map.find(p);
-    if (res == map.end()) throwNotFound();
+    if (res == map.end())
+      throw std::out_of_range("Item not found");
 
     return 1 + tree.indexOf(res -> second);
   }
   const Product& product(size_t rank) const {
-    if (--rank >= map.size()) throwNotFound();
+    if (--rank >= map.size()) throwIndexOutOf(rank);
     return tree.byIndex(rank) -> key.data;
   }
 
@@ -740,27 +855,29 @@ struct Bestsellers {
   // The same but sum over interval of products (including from and to)
   // It must hold: sold(x) == sold(x, x)
   size_t sold(size_t from, size_t to) const {
-    if (--from >= map.size()) throwNotFound();
-    if (--to   >= map.size()) throwNotFound();
-    if (from > to        ) throwNotFound();
+    if (--from >= map.size()) throwIndexOutOf(from);
+    if (--to   >= map.size()) throwIndexOutOf(to);
+    if (from > to        )
+      throw std::out_of_range("From is greater than to: "s + to_string(from) + " > " + to_string(to));
 
     return tree.sumRange(from, to);
   }
 
   // The smallest (resp. largest) rank with sold(rank) == sold(r)
   size_t first_same(size_t rank) const {
-    if (--rank >= map.size()) throwNotFound();
+    if (--rank >= map.size()) throwIndexOutOf(rank);
 
     return 1 + tree.indexOf(tree.lowerBound(tree.byIndex(rank)));
   }
 
   size_t last_same(size_t rank) const {
-    if (--rank >= map.size()) throwNotFound();
+    if (--rank >= map.size()) throwIndexOutOf(rank);
 
     return 1 + tree.indexOf(tree.upperBound(tree.byIndex(rank)));
   }
 
   void print() const noexcept { tree.print(); }
+  void validate() const { tree.validate(); }
 };
 
 #ifndef __PROGTEST__
@@ -785,7 +902,6 @@ void test1() {
    assert(T.sold(2) == 13);
    assert(T.sold(2, 2) == 13);
    assert(T.sold(1, 2) == 45);
-   T.print();
 }
  
 void test2() {
@@ -829,7 +945,6 @@ void testRankRanges() {
   T.sell(6, 30);
   T.sell(7, 30);
   T.sell(8, 30);
-  T.print();
   assert(T.first_same(1) == 1);
   assert(T.first_same(2) == 1);
   assert(T.first_same(3) == 1);
@@ -860,12 +975,42 @@ void testCompile() {
   // b.first_same(1);
   // b.last_same(1);
 }
+size_t random(const size_t min, const size_t max) {
+  return rand() % (max - min + 1) + min;
+}
+size_t random(const size_t max) { return random(0, max); }
+
+void bulkTest() {
+  if constexpr (true) srand (time(NULL));
+
+  for (size_t t = 0; t < 4; ++t) {
+    Bestsellers<ssize_t> b;
+    const size_t maxName = 1 << 10;
+    const size_t maxCount = 1 << 10;
+    for (size_t i = 0; i < 1 << 16; ++i) {
+      b.sell(random(maxName), random(maxCount));
+      // b.print();
+      b.validate();
+
+      const size_t rank = random(1, b.products() / 2 + 1);
+      assert(rank == b.rank(b.product(rank)));
+      const size_t rank2 = random(b.products() / 2 + 1, b.products());
+      if (rank < rank2)
+        b.sold(rank, rank2);
+      else b.sold(rank2, rank);
+
+      b.first_same(rank);
+      b.last_same(rank);
+    }
+  }
+}
 
 int main() {
+  bulkTest();
   test1();
   test2();
   testRankRanges();
-  testCompile();
+  // testCompile();
   return 0;
 }
 
