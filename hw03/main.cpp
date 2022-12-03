@@ -167,7 +167,7 @@ void printCache(const Cache& cache, size_t rowWidth, ostream& out = cout) {
   }
 }
 
-size_t resolveNodeIterative(
+size_t resolveNodeIterativeBFS(
     const Args& args,
     const Map& tree,
     const InversedTree& inversed
@@ -240,6 +240,78 @@ size_t resolveNodeIterative(
       ? cache[start] : cache[start + totalItems]) - 1;
 }
 
+
+size_t resolveNodeIterativeTopSort(
+    const Args& args,
+    const Map& tree,
+    const InversedTree& inversed
+) {
+
+  const size_t totalItems = args.gifts.size();
+  const Map& map = inversed.map;
+  const vector<uint64_t>& gifts = args.gifts;
+
+  Cache cache((1 + args.max_group_size) * totalItems);
+
+  queue<Point> q;
+  vector<size_t> topSortArray(totalItems); 
+  for (const auto& edge : tree) {
+    ++topSortArray[edge.first];
+  }
+
+  // initial Top Sort fill up
+  // for (Point p = 0; p < totalItems; ++p) {
+  //   if (topSortArray[p] == 0) {
+  //     q.emplace(p);
+  //   }
+  // }
+  for (const Point p : inversed.starting) {
+    q.emplace(p);
+  }
+
+  while (!q.empty()) {
+    const Point item = q.front();
+    q.pop();
+
+    // printCache(cache, totalItems);
+    // cout << "Handling " << item << endl;
+
+    size_t sumNo = 0; // not guarded
+    size_t sumWith = gifts[item]; // guarded
+
+    // compute value
+    const auto range = tree.equal_range(item);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+      const Point curr = itr -> second;
+
+      const size_t r = cache[curr] - 1;
+      sumWith += r;
+
+      size_t r1 = cache[curr + totalItems] - 1;
+      sumNo += r > r1 ? r : r1;
+    }
+
+    cache[item] = sumNo + 1;
+    cache[item + totalItems] = sumWith + 1;
+
+    {
+      // schedule next ones
+      const auto range = map.equal_range(item);
+      for (auto itr = range.first; itr != range.second; ++itr) {
+        const Point curr = itr -> second;
+        --topSortArray[curr];
+        if (topSortArray[curr] == 0) {
+          q.emplace(curr);
+        }
+      }
+    }
+  }
+
+  // printCache(cache, totalItems);
+  return (cache[start] > cache[start + totalItems]
+      ? cache[start] : cache[start + totalItems]) - 1;
+}
+
 uint64_t solve(const Args& args) {
   if (args.gifts.size() == 0)
     return 0;
@@ -253,8 +325,11 @@ uint64_t solve(const Args& args) {
   //
   //return max1 > max2 ? max1 : max2;
 
+  // const InversedTree inversed = inverseTree(buildTree(buildVerticies(args)));
+  // return resolveNodeIterativeBFS(args, tree, inversed);
+
   const InversedTree inversed = inverseTree(buildTree(buildVerticies(args)));
-  return resolveNodeIterative(args, tree, inversed);
+  return resolveNodeIterativeTopSort(args, tree, inversed);
 }
 
 #ifndef __PROGTEST__
