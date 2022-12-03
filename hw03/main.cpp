@@ -34,6 +34,7 @@ using namespace std;
 using Args = TreeProblem;
 using Point = ChristmasTree;
 using Map = unordered_multimap<Point, Point>;
+using Cache = vector<size_t>;
 
 
 const Point start = 0;
@@ -88,25 +89,34 @@ Map buildTree(const Map& vert) {
 size_t resolveNode(
     const Args& args,
     const Map& tree,
+    Cache& cache,
     const Point node,
     const bool shouldGuard
     ) {
+
+  const size_t cacheIndex = node + (shouldGuard ? args.gifts.size() : 0);
+  if (cache[cacheIndex] != 0)
+    return cache[cacheIndex] - 1;
+
   size_t max = 0;
 
   const auto range = tree.equal_range(node);
   for (auto itr = range.first; itr != range.second; ++itr) {
     const Point curr = itr -> second;
 
-    size_t r = resolveNode(args, tree, curr, false);
+    size_t r = resolveNode(args, tree, cache, curr, false);
 
     if (!shouldGuard) {
-      const size_t r2 = resolveNode(args, tree, curr, true);
+      const size_t r2 = resolveNode(args, tree, cache, curr, true);
       if (r2 > r) r = r2;
     }
     max += r;
   }
 
-  return max + (shouldGuard ? args.gifts[node] : 0);
+  const size_t res = max + (shouldGuard ? args.gifts[node] : 0);
+  cache[cacheIndex] = res + 1;
+
+  return res;
 }
 
 uint64_t solve(const Args& args) {
@@ -114,10 +124,12 @@ uint64_t solve(const Args& args) {
     return 0;
 
   // printMap(buildVerticies(args));
-  Map tree = buildTree(buildVerticies(args));
-  printMap(tree);
-  size_t max1 = resolveNode(args, tree, 0, true);
-  size_t max2 = resolveNode(args, tree, 0, false);
+  const Map tree = buildTree(buildVerticies(args));
+  Cache cache((1 + args.max_group_size) * args.gifts.size());
+
+  size_t max1 = resolveNode(args, tree, cache, 0, true);
+  size_t max2 = resolveNode(args, tree, cache, 0, false);
+
   return max1 > max2 ? max1 : max2;
 }
 
