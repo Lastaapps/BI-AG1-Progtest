@@ -60,6 +60,20 @@ ostream& operator<<(ostream& out, const vector<T>& data) {
   return out << ")";
 }
 
+void printCache(const Cache& cache, size_t rowWidth, ostream& out = cout) {
+  for (size_t i = 0; i < cache.size() / rowWidth; ++i) {
+    bool isFirst = true;
+    for (size_t j = 0; j < rowWidth; ++j) {
+      if (isFirst) isFirst = false;
+      else out << ",";
+
+      size_t t = cache[i * rowWidth + j];
+      if (t == 0) out << "*"; else out << t - 1;
+    }
+    out << "\n";
+  }
+}
+
 inline Map buildVerticies(const Args& args) {
   Map map(args.gifts.size());
 
@@ -101,25 +115,12 @@ Tree buildTree(const Args& args, const Map& vert) {
   return Tree{ move(map), move(back), move(starting) };
 }
 
-void printCache(const Cache& cache, size_t rowWidth, ostream& out = cout) {
-  for (size_t i = 0; i < cache.size() / rowWidth; ++i) {
-    bool isFirst = true;
-    for (size_t j = 0; j < rowWidth; ++j) {
-      if (isFirst) isFirst = false;
-      else out << ",";
-
-      size_t t = cache[i * rowWidth + j];
-      if (t == 0) out << "*"; else out << t - 1;
-    }
-    out << "\n";
-  }
-}
-
 size_t resolveNodeIterativeTopSort(
     const Args& args,
     const Tree& tree
 ) {
   const size_t totalItems = args.gifts.size();
+  const bool twoAllowed = args.max_group_size == 2;
 
   const Map& map = tree.map;
   const BackMap& back = tree.back;
@@ -138,12 +139,6 @@ size_t resolveNodeIterativeTopSort(
   --topSortArray[0];
   // cout << "Top " << topSortArray << endl;
 
-  // initial Top Sort fill up
-  // for (Point p = 0; p < totalItems; ++p) {
-  //   if (topSortArray[p] == 0) {
-  //     q.emplace(p);
-  //   }
-  // }
   for (const Point p : starting) {
     q.emplace(p);
   }
@@ -152,25 +147,34 @@ size_t resolveNodeIterativeTopSort(
     const Point item = q.front();
     q.pop();
 
-    // printCache(cache, totalItems);
     // cout << "Handling " << item << endl;
 
-    size_t sumNo = 0; // not guarded
-    size_t sumWith = gifts[item]; // guarded
+    size_t sumNone = 0; // not guarded
+    size_t sumOne  = gifts[item]; // guarded by one or two
+    ssize_t maxDiff = 0;
 
     // compute value
     for (const auto& curr : map[item]) {
 
-      const size_t r = cache[curr] - 1;
-      sumWith += r;
+      const ssize_t byNone = cache[curr] - 1;
+      const ssize_t byOne  = cache[curr + totalItems] - 1;
 
-      size_t r1 = cache[curr + totalItems] - 1;
-      sumNo += r > r1 ? r : r1;
+      if (twoAllowed) {
+        const ssize_t byTwo  = cache[curr + 2 * totalItems] - 1;
+        sumNone += max(max(byNone, byOne), byTwo);
+        sumOne  += byNone;
+        maxDiff = max(maxDiff, byTwo - byNone);
+      } else {
+        sumNone += max(byNone, byOne);
+        sumOne  += byNone;
+      }
     }
 
-    cache[item] = sumNo + 1;
-    cache[item + totalItems] = sumWith + 1;
-
+    cache[item] = sumNone + 1;
+    cache[item + totalItems] = sumOne + maxDiff + 1;
+    if (twoAllowed) {
+      cache[item + 2 * totalItems] = sumOne + 1;
+    }
 
     {
       // schedule next ones
@@ -180,11 +184,18 @@ size_t resolveNodeIterativeTopSort(
         q.emplace(curr);
       }
     }
+
+    // printCache(cache, totalItems);
   }
 
-  // printCache(cache, totalItems);
-  return (cache[start] > cache[start + totalItems]
-      ? cache[start] : cache[start + totalItems]) - 1;
+  if (twoAllowed) {
+    return max(
+        max(cache[start], cache[start + totalItems]),
+        cache[start + 2 * totalItems]
+        ) - 1;
+  } else {
+    return max(cache[start], cache[start + totalItems]) - 1;
+  }
 }
 
 uint64_t solve(const Args& args) {
@@ -265,8 +276,14 @@ void test(const std::vector<TestCase>& T) {
 }
 
 int main() {
+  printLine();
+  cout << "BASIC TEST" << endl;
+  printLine();
   test(BASIC_TESTS);
-  // test(BONUS_TESTS);
+  printLine();
+  cout << "BONUS TEST" << endl;
+  printLine();
+  test(BONUS_TESTS);
 }
 
 #endif
